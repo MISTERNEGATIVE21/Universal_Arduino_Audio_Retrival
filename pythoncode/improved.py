@@ -1,114 +1,116 @@
 import serial
-import serial.tools.list_ports
-import tkinter as tk
-from tkinter import ttk
+from serial.tools import list_ports
 import wave
-import threading
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.animation import FuncAnimation
+import tkinter as tk
+from tkinter import ttk
+from threading import Thread
 
-# Rest of the code...
+SERIAL_PORT = 'COM3'  # Change this to your serial port
+BAUD_RATE = 115200
+WAV_FILENAME = 'recorded_audio.wav'
+SAMPLE_RATE = 40000
+CHANNELS = 1
+SAMPLE_WIDTH = 2  # 2 bytes for 16-bit audio
+BUFFER_SIZE = 512
 
+recording = False
+selected_port = None
+ser = None
+audio_data = []
 
-def toggle_recording():
-    global is_recording
-    is_recording = not is_recording
-    if is_recording:
-        my_port.write(b'R')  # Send start recording command
-        tk_canvas.itemconfig(circle, fill="red")
-        start_recording()
-    else:
-        my_port.write(b'S')  # Send stop recording command
-        tk_canvas.itemconfig(circle, fill="green")
-        stop_recording()
+# Function to list available serial ports
+def list_serial_ports():
+    return [port.device for port in list_ports.comports()]
 
-def start_recording():
-    global wave_file
-    wave_file = wave.open("recorded_audio.wav", 'wb')
-    wave_file.setnchannels(1)  # Mono
-    wave_file.setsampwidth(2)   # 2 bytes (16-bit)
-    wave_file.setframerate(44100)  # Sample rate
-    stream_thread = threading.Thread(target=record_audio)
-    stream_thread.start()
-
-def stop_recording():
-    global wave_file
-    if wave_file:
-        wave_file.close()
-        wave_file = None
-
+# Function to read from serial and write to WAV file
 def record_audio():
-    while is_recording:
-        data = my_port.read(1024)  # Read audio data from serial port
-        wave_file.writeframes(data)
-        update_spectrum(data)
+    global recording, ser, audio_data
+    audio_data = []
+    with wave.open(WAV_FILENAME, 'wb') as wf:
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(SAMPLE_WIDTH)
+        wf.setframerate(SAMPLE_RATE)
+        while recording:
+            data = ser.read(BUFFER_SIZE)
+            if data:
+                audio_data.extend(np.frombuffer(data, dtype=np.int16))
+                wf.writeframes(data)
 
-def stop_audio():
-    pass  # No need to stop audio playback since we're not using PyAudio
+# Function to handle the record button click
+def start_recording():
+    global recording, ser
+    selected_port = port_var.get()
+    if selected_port:
+        ser = serial.Serial(selected_port, BAUD_RATE)
+        recording = True
+        record_button.config(state=tk.DISABLED)
+        stop_button.config(state=tk.NORMAL)
+        port_menu.config(state=tk.DISABLED)
+        thread = Thread(target=record_audio)
+        thread.start()
+        # thread_plot = Thread(target=plot_spectrum)
+        # thread_plot.start()
+        plot_spectrum()
 
-def on_closing():
-    global is_recording
-    if is_recording:
-        my_port.write(b'S')  # Send stop recording command
-        is_recording = False
-        stop_recording()
-    my_port.close()
-    root.destroy()
+# Function to handle the stop button click
+def stop_recording():
+    global recording, ser
+    recording = False
+    ser.close()
+    record_button.config(state=tk.NORMAL)
+    stop_button.config(state=tk.DISABLED)
+    port_menu.config(state=tk.NORMAL)
 
-def select_port(event):
-    global my_port
-    selected_port = port_combobox.get()
-    if my_port.is_open:
-        my_port.close()
-    my_port = serial.Serial(selected_port, 115200)
-
-def update_spectrum(data):
-    global spectrum_line
-    audio_data = np.frombuffer(data, dtype=np.int16)
-    fft_result = np.fft.rfft(audio_data)
-    freqs = np.fft.rfftfreq(len(audio_data), 1 / 44100)
-    spectrum_line.set_ydata(np.abs(fft_result))
-    spectrum_line.set_xdata(freqs)
-    ax.set_xlim(0, freqs[-1])
-    ax.set_ylim(0, np.max(np.abs(fft_result)))
-    fig_canvas.draw()
-
-# List available ports
-ports = list(serial.tools.list_ports.comports())
-port_names = [port.device for port in ports]
-
-# Setup the UI
+# Tkinter GUI setup
 root = tk.Tk()
-root.title("Audio Recorder")
-root.protocol("WM_DELETE_WINDOW", on_closing)
+root.title('Audio Recorder with Spectrum Analyzer')
 
-port_label = tk.Label(root, text="Select Serial Port:")
-port_label.pack()
+frame = ttk.Frame(root, padding=10)
+frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
-port_combobox = ttk.Combobox(root, values=port_names)
-port_combobox.bind("<<ComboboxSelected>>", select_port)
-port_combobox.pack()
-port_combobox.current(0)
+ports = list_serial_ports()
+port_var = tk.StringVar(value=ports[0] if ports else '')
 
-my_port = serial.Serial(port_names[0], 115200)
-is_recording = False
+port_label = ttk.Label(frame, text="Select Serial Port:")
+port_label.grid(row=0, column=0, padx=5, pady=5)
 
-# Setup Tkinter Canvas
-tk_canvas = tk.Canvas(root, width=200, height=200)
-tk_canvas.pack()
+port_menu = ttk.OptionMenu(frame, port_var, *ports)
+port_menu.grid(row=0, column=1, padx=5, pady=5)
 
-circle = tk_canvas.create_oval(75, 75, 125, 125, fill="green")
+record_button = ttk.Button(frame, text='Record', command=start_recording)
+record_button.grid(row=1, column=0, padx=5, pady=5)
 
-tk_canvas.bind("<Button-1>", lambda e: toggle_recording())
+stop_button = ttk.Button(frame, text='Stop', command=stop_recording)
+stop_button.grid(row=1, column=1, padx=5, pady=5)
+stop_button.config(state=tk.DISABLED)
 
-# Setup the spectrum analyzer
+# Plotting setup
 fig, ax = plt.subplots()
-spectrum_line, = ax.plot([], [])
-ax.set_title("Spectrum Analyzer")
-ax.set_xlabel("Frequency (Hz)")
-ax.set_ylabel("Amplitude")
-fig_canvas = FigureCanvasTkAgg(fig, master=root)
-fig_canvas.get_tk_widget().pack()
+x_data = np.linspace(0, SAMPLE_RATE // 2, BUFFER_SIZE // 2)
+y_data = np.zeros(BUFFER_SIZE // 2)
+line, = ax.plot(x_data, y_data)
+ax.set_xlim(0, SAMPLE_RATE // 2)
+ax.set_ylim(0, 1)
+ax.set_xlabel('Frequency (Hz)')
+ax.set_ylabel('Magnitude')
+
+# Function to update the plot
+def update_plot(frame):
+    global audio_data
+    if len(audio_data) >= BUFFER_SIZE:
+        sample = audio_data[-BUFFER_SIZE:]
+        audio_data = audio_data[-BUFFER_SIZE:]  # Keep the latest buffer size
+        spectrum = np.abs(np.fft.rfft(sample)) / BUFFER_SIZE
+        line.set_ydata(spectrum)
+        fig.canvas.draw_idle()  # Update the plot
+    return line,
+
+# Function to plot the spectrum analyzer
+def plot_spectrum():
+    ani = FuncAnimation(fig, update_plot, interval=50, blit=True)
+    plt.show()
 
 root.mainloop()
