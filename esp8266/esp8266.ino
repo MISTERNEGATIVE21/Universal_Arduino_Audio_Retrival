@@ -1,6 +1,6 @@
 #include <Arduino.h>
 
-#define SAMPLE_RATE 20000  // Sample rate in Hz (adjust as needed)
+#define SAMPLE_RATE 40000  // Sample rate in Hz (adjust as needed)
 #define BUFFER_SIZE 512   // Buffer size for storing samples
 #define ADC_PIN A0        // ADC pin for analog input
 
